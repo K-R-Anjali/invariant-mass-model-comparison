@@ -1,0 +1,577 @@
+// trigger_massfit_modelcomparison.C
+
+#ifdef __CLING__
+R__LOAD_LIBRARY(libDelphes)
+#include "classes/DelphesClasses.h"
+#include "external/ExRootAnalysis/ExRootTreeReader.h"
+#endif
+
+#include <TSystem.h>
+#include <TChain.h>
+#include <TClonesArray.h>
+#include <TString.h>
+#include <TGraphErrors.h>
+#include <TCanvas.h>
+#include <TH1F.h>
+#include <TF1.h>
+#include <TLorentzVector.h>
+#include <TLegend.h>
+#include <TLatex.h>
+#include <cmath>
+#include <vector>
+#include <fstream>
+#include <iostream>
+
+////////////////////////////////////////////////////////////
+// deltaR
+////////////////////////////////////////////////////////////
+
+double deltaRfun(double eta1,double phi1,
+                 double eta2,double phi2)
+{
+ double dEta = eta1 - eta2;
+ double dPhi = phi1 - phi2;
+
+ while(dPhi >  M_PI) dPhi -= 2*M_PI;
+ while(dPhi < -M_PI) dPhi += 2*M_PI;
+
+ return sqrt(dEta*dEta + dPhi*dPhi);
+}
+
+////////////////////////////////////////////////////////////
+// truncated gaussian
+////////////////////////////////////////////////////////////
+
+double truncGaus(double *x, double *p)
+{
+ double A = p[0];
+ double mu = p[1];
+ double sigma = p[2];
+
+ double xmin = 1.0;
+ double xmax = 6.5;
+
+ if(x[0] < xmin || x[0] > xmax)
+     return 0;
+
+ double norm =
+ 0.5*(erf((xmax-mu)/(sqrt(2)*sigma))
+    -erf((xmin-mu)/(sqrt(2)*sigma)));
+
+ if(norm<=0) return 0;
+
+ return A*exp(-0.5*pow((x[0]-mu)/sigma,2))/norm;
+}
+
+////////////////////////////////////////////////////////////
+
+void trigger_massfit_modelcomparison()
+{
+
+ TString outDir =
+ "trigger_massfit_modelcomparison_output";
+
+ gSystem->Exec(
+ Form("mkdir -p %s",
+ outDir.Data()));
+
+////////////////////////////////////////////////////////////
+// input files
+////////////////////////////////////////////////////////////
+
+ vector<TString> files = {
+
+ "delphes_output_inclusive_m1.root",
+ "delphes_output_inclusive_m2.root",
+ "delphes_output_inclusive_m3p1_1.root",
+ "delphes_output_inclusive_m4.root",
+ "delphes_output_inclusive_m5.root",
+ "delphes_output_inclusive_m6.root",
+ "delphes_output_inclusive_m6p5_1.root",
+ "delphes_output_inclusive_m7_doublevents.root",
+ "delphes_output_inclusive_m8_doublevents.root",
+ "delphes_output_inclusive_m9_doublevents.root",
+ "delphes_output_inclusive_m10_doublevents.root"
+ };
+
+ vector<double> masses =
+ {1,2,3.1,4,5,6,6.5,7,8,9,10};
+
+////////////////////////////////////////////////////////////
+// storage
+////////////////////////////////////////////////////////////
+
+ vector<double> effVals;
+ vector<double> effErrs;
+
+ vector<double> chi2_gaus_vec;
+ vector<double> chi2_trunc_vec;
+ vector<double> chi2_cb_vec;
+
+////////////////////////////////////////////////////////////
+// output table
+////////////////////////////////////////////////////////////
+
+ ofstream table;
+
+ table.open(
+
+ Form("%s/model_comparison_results.csv",
+ outDir.Data()));
+
+ table<<"Mass,"
+      <<"BestModel,"
+      <<"chi2_Gauss,"
+      <<"chi2_Trunc,"
+      <<"chi2_CB,"
+      <<"AIC_Gauss,"
+      <<"AIC_Trunc,"
+      <<"AIC_CB,"
+      <<"BIC_Gauss,"
+      <<"BIC_Trunc,"
+      <<"BIC_CB\n";
+
+////////////////////////////////////////////////////////////
+// loop over masses
+////////////////////////////////////////////////////////////
+
+ for(int i=0;i<masses.size();i++)
+ {
+
+ TString file = files[i];
+ double mass = masses[i];
+
+ TChain chain("Delphes");
+ chain.Add(file);
+
+ ExRootTreeReader *tr =
+ new ExRootTreeReader(&chain);
+
+ TClonesArray *branchElectron =
+ tr->UseBranch("Electron");
+
+ Long64_t N =
+ tr->GetEntries();
+
+////////////////////////////////////////////////////////////
+// histogram
+////////////////////////////////////////////////////////////
+
+ TH1F *hMass =
+ new TH1F("hMass",
+ "Mee; M_{ee} [GeV]; Events",
+ 200,0,12);
+
+ int Npass=0;
+
+////////////////////////////////////////////////////////////
+// event loop
+////////////////////////////////////////////////////////////
+
+ for(Long64_t ev=0; ev<N; ev++)
+ {
+
+ tr->ReadEntry(ev);
+
+ Electron *pos=nullptr;
+ Electron *neg=nullptr;
+
+ double ptpos=-1;
+ double ptneg=-1;
+
+ for(int j=0;
+ j<branchElectron->GetEntries();
+ j++)
+ {
+
+ Electron *e =
+ (Electron*)branchElectron->At(j);
+
+ if(!e) continue;
+
+ if(e->Charge>0 && e->PT>ptpos)
+ {
+ pos=e;
+ ptpos=e->PT;
+ }
+
+ if(e->Charge<0 && e->PT>ptneg)
+ {
+ neg=e;
+ ptneg=e->PT;
+ }
+
+ }
+
+ if(!(pos && neg)) continue;
+
+ if(pos->PT<4 || neg->PT<4)
+ continue;
+
+ if(fabs(pos->Eta)>1.2 ||
+ fabs(neg->Eta)>1.2)
+ continue;
+
+ double dR =
+ deltaRfun(pos->Eta,pos->Phi,
+ neg->Eta,neg->Phi);
+
+ if(dR>0.9) continue;
+
+ TLorentzVector v =
+ pos->P4()+neg->P4();
+
+ double Mee=v.M();
+ if (Mee<1 || Mee>2)
+
+ hMass->Fill(Mee);
+
+ Npass++;
+
+ }
+
+////////////////////////////////////////////////////////////
+// efficiency
+////////////////////////////////////////////////////////////
+
+ double eff =
+ double(Npass)/double(N);
+
+ double err =
+ sqrt(eff*(1-eff)/N);
+
+ effVals.push_back(eff);
+ effErrs.push_back(err);
+
+////////////////////////////////////////////////////////////
+// fitting window
+////////////////////////////////////////////////////////////
+
+ int binMax =
+ hMass->GetMaximumBin();
+
+ double peak =
+ hMass->GetBinCenter(binMax);
+
+ double fitMin =
+ peak-0.4;
+
+ double fitMax =
+ peak+0.4;
+
+////////////////////////////////////////////////////////////
+// models
+////////////////////////////////////////////////////////////
+
+ TF1 *gaus =
+ new TF1("gaus",
+ "[0]*exp(-0.5*((x-[1])/[2])^2)",
+ fitMin,fitMax);
+
+ TF1 *trunc =
+ new TF1("trunc",
+ truncGaus,
+ fitMin,fitMax,
+ 3);
+
+ TF1 *cb =
+ new TF1("cb",
+
+ "[0]*ROOT::Math::crystalball_function(x,[1],[2],[3],[4])",
+
+ fitMin,fitMax);
+
+////////////////////////////////////////////////////////////
+// initialise parameters
+////////////////////////////////////////////////////////////
+
+ double norm =
+ hMass->Integral();
+
+ gaus->SetParameters(norm,peak,0.1);
+
+ trunc->SetParameters(norm,peak,0.1);
+
+ cb->SetParameters(
+
+ norm,
+ 1.5,
+ 3,
+ peak,
+ 0.1);
+
+////////////////////////////////////////////////////////////
+// fit
+////////////////////////////////////////////////////////////
+
+ hMass->Fit(gaus,"RQ0");
+ hMass->Fit(trunc,"RQ0");
+ hMass->Fit(cb,"RQ0");
+
+////////////////////////////////////////////////////////////
+// statistics
+////////////////////////////////////////////////////////////
+
+ double chi2_gaus =
+ gaus->GetChisquare()/
+ gaus->GetNDF();
+
+ double chi2_trunc =
+ trunc->GetChisquare()/
+ trunc->GetNDF();
+
+ double chi2_cb =
+ cb->GetChisquare()/
+ cb->GetNDF();
+
+ chi2_gaus_vec.push_back(chi2_gaus);
+ chi2_trunc_vec.push_back(chi2_trunc);
+ chi2_cb_vec.push_back(chi2_cb);
+
+////////////////////////////////////////////////////////////
+// likelihood approx
+////////////////////////////////////////////////////////////
+
+ double logL_gaus =
+ -0.5*gaus->GetChisquare();
+
+ double logL_trunc =
+ -0.5*trunc->GetChisquare();
+
+ double logL_cb =
+ -0.5*cb->GetChisquare();
+
+////////////////////////////////////////////////////////////
+// AIC BIC
+////////////////////////////////////////////////////////////
+
+ double AIC_gaus =
+ 2*3 - 2*logL_gaus;
+
+ double AIC_trunc =
+ 2*3 - 2*logL_trunc;
+
+ double AIC_cb =
+ 2*5 - 2*logL_cb;
+
+ double BIC_gaus =
+ 3*log(Npass) - 2*logL_gaus;
+
+ double BIC_trunc =
+ 3*log(Npass) - 2*logL_trunc;
+
+ double BIC_cb =
+ 5*log(Npass) - 2*logL_cb;
+
+////////////////////////////////////////////////////////////
+// choose best model
+////////////////////////////////////////////////////////////
+
+ string best="Gaussian";
+ double bestAIC=AIC_gaus;
+
+ if(AIC_trunc<bestAIC)
+ {
+ best="TruncatedGaussian";
+ bestAIC=AIC_trunc;
+ }
+
+ if(AIC_cb<bestAIC)
+ {
+ best="CrystalBall";
+ bestAIC=AIC_cb;
+ }
+
+////////////////////////////////////////////////////////////
+// save row
+////////////////////////////////////////////////////////////
+
+ table<<mass<<","
+ <<best<<","
+ <<chi2_gaus<<","
+ <<chi2_trunc<<","
+ <<chi2_cb<<","
+ <<AIC_gaus<<","
+ <<AIC_trunc<<","
+ <<AIC_cb<<","
+ <<BIC_gaus<<","
+ <<BIC_trunc<<","
+ <<BIC_cb<<"\n";
+
+////////////////////////////////////////////////////////////
+// draw plot
+////////////////////////////////////////////////////////////
+
+ TCanvas *c =
+ new TCanvas(
+ Form("c_%g",mass),
+ "",
+ 800,700);
+
+ hMass->GetXaxis()
+ ->SetRangeUser(fitMin,fitMax);
+
+ hMass->Draw("E");
+
+ gaus->SetLineColor(kRed);
+ trunc->SetLineColor(kBlue);
+ cb->SetLineColor(kGreen+2);
+
+ gaus->Draw("same");
+ trunc->Draw("same");
+ cb->Draw("same");
+
+ TLegend *leg =
+ new TLegend(
+ 0.55,0.65,
+ 0.85,0.85);
+
+ leg->AddEntry(
+ gaus,"Gaussian","l");
+
+ leg->AddEntry(
+ trunc,"Truncated Gaussian","l");
+
+ leg->AddEntry(
+ cb,"Crystal Ball","l");
+
+ leg->Draw();
+
+ c->SaveAs(
+
+ Form("%s/model_compare_%g.png",
+ outDir.Data(),
+ mass));
+
+ delete c;
+ delete hMass;
+ delete tr;
+
+ }
+
+////////////////////////////////////////////////////////////
+// chi2 vs mass plot
+////////////////////////////////////////////////////////////
+
+ TGraph *g1 =
+ new TGraph(masses.size());
+
+ TGraph *g2 =
+ new TGraph(masses.size());
+
+ TGraph *g3 =
+ new TGraph(masses.size());
+
+ for(int i=0;i<masses.size();i++)
+ {
+
+ g1->SetPoint(i,masses[i],
+ chi2_gaus_vec[i]);
+
+ g2->SetPoint(i,masses[i],
+ chi2_trunc_vec[i]);
+
+ g3->SetPoint(i,masses[i],
+ chi2_cb_vec[i]);
+
+ }
+
+ TCanvas *cChi2 =
+ new TCanvas(
+ "cChi2","",900,700);
+
+ g1->SetTitle(
+ "#chi^{2}/NDF vs Mass; Mass [GeV]; #chi^{2}/NDF");
+
+ g1->SetMarkerStyle(20);
+ g2->SetMarkerStyle(21);
+ g3->SetMarkerStyle(22);
+
+ g1->SetMarkerColor(kRed);
+ g2->SetMarkerColor(kBlue);
+ g3->SetMarkerColor(kGreen+2);
+
+ g1->SetMinimum(0);
+ g1->SetMaximum(20);
+
+ g1->Draw("AP");
+ g2->Draw("P same");
+ g3->Draw("P same");
+
+ TLegend *leg2 =
+ new TLegend(
+ 0.55,0.7,
+ 0.85,0.85);
+
+ leg2->AddEntry(
+ g1,"Gaussian","p");
+
+ leg2->AddEntry(
+ g2,"Truncated","p");
+
+ leg2->AddEntry(
+ g3,"Crystal Ball","p");
+
+ leg2->Draw();
+
+ cChi2->SaveAs(
+
+ Form("%s/chi2_vs_mass_models.png",
+ outDir.Data()));
+
+////////////////////////////////////////////////////////////
+// efficiency plot
+////////////////////////////////////////////////////////////
+
+ TGraphErrors *gEff =
+ new TGraphErrors(
+ masses.size());
+
+ for(int i=0;i<masses.size();i++)
+ {
+
+ gEff->SetPoint(i,
+ masses[i],
+ effVals[i]);
+
+ gEff->SetPointError(i,
+ 0,
+ effErrs[i]);
+
+ }
+
+ TCanvas *cEff =
+ new TCanvas(
+ "cEff","",900,700);
+
+ gEff->SetTitle(
+
+ "Reconstruction Efficiency vs Mass; Mass [GeV]; Efficiency");
+
+ gEff->SetMarkerStyle(20);
+
+ gEff->SetMinimum(0);
+ gEff->SetMaximum(1);
+
+ gEff->Draw("AP");
+
+ cEff->SaveAs(
+
+ Form("%s/efficiency_vs_mass.png",
+ outDir.Data()));
+
+ table.close();
+
+ std::cout<<"\nDONE\n";
+
+}
+
+#ifndef __CLING__
+
+int main()
+{
+ trigger_massfit_modelcomparison();
+ return 0;
+}
+
+#endif
