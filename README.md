@@ -20,9 +20,10 @@ We compare their performance using $\chi^2/\text{NDF}$, Akaike Information Crite
 
 ## ⚙️ Prerequisites and Dependencies
 To reproduce the analysis and run the fitting scripts, you will need the following frameworks installed:
-- **[ROOT](https://root.cern/)** (compiled with `RooFit` support) - Object-oriented data analysis framework.
-- **[Delphes 3](https://cp3.irmp.ucl.ac.be/projects/delphes)** - Modular framework for fast simulation of a generic collider experiment.
 - **[MadGraph5_aMC@NLO](https://launchpad.net/mg5amcnlo)** - Matrix-element event generator (used for generating the initial $e^+e^-$ Monte Carlo samples).
+- **[Delphes 3](https://cp3.irmp.ucl.ac.be/projects/delphes)** - Modular framework for fast simulation of a generic collider experiment.
+- **[ROOT](https://root.cern/)** (compiled with `RooFit` support) - Object-oriented data analysis framework.
+
 
 ## 🚀 Running the Analysis
 
